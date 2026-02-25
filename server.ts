@@ -17,14 +17,15 @@ const lobbies = new Map();
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
-    socket.on('create-lobby', (lobbyName) => {
+    socket.on('create-lobby', (lobbyName, username) => {
         const lobbyId = Math.random().toString(36).substring(2, 9);
         const lobby = {
             id: lobbyId,
             name: lobbyName,
             hostId: socket.id,
-            players: [{ id: socket.id, name: 'Player 1', ready: false }],
-            state: 'waiting'
+            players: [{ id: socket.id, name: username || 'Player 1', ready: false }],
+            state: 'waiting',
+            selectingCardPlayers: new Set()
         };
         lobbies.set(lobbyId, lobby);
         socket.join(lobbyId);
@@ -36,10 +37,10 @@ io.on('connection', (socket) => {
         socket.emit('lobbies-update', Array.from(lobbies.values()));
     });
 
-    socket.on('join-lobby', (lobbyId) => {
+    socket.on('join-lobby', (lobbyId, username) => {
         const lobby = lobbies.get(lobbyId);
         if (lobby && lobby.players.length < 4 && lobby.state === 'waiting') {
-            lobby.players.push({ id: socket.id, name: `Player ${lobby.players.length + 1}`, ready: false });
+            lobby.players.push({ id: socket.id, name: username || `Player ${lobby.players.length + 1}`, ready: false });
             socket.join(lobbyId);
             io.to(lobbyId).emit('lobby-updated', lobby);
             io.emit('lobbies-update', Array.from(lobbies.values()));
@@ -98,22 +99,44 @@ io.on('connection', (socket) => {
             io.to(lobbyId).emit('game-resumed');
         }
     });
+
+    socket.on('started-selecting-card', (lobbyId) => {
+        const lobby = lobbies.get(lobbyId);
+        if (lobby) {
+            lobby.selectingCardPlayers.add(socket.id);
+            io.to(lobbyId).emit('force-pause-selection', true);
+        }
+    });
+
+    socket.on('finished-selecting-card', (lobbyId) => {
+        const lobby = lobbies.get(lobbyId);
+        if (lobby) {
+            lobby.selectingCardPlayers.delete(socket.id);
+            if (lobby.selectingCardPlayers.size === 0) {
+                io.to(lobbyId).emit('force-pause-selection', false);
+            }
+        }
+    });
 });
 
 function leaveLobby(socket) {
     for (const [lobbyId, lobby] of lobbies.entries()) {
         const playerIndex = lobby.players.findIndex(p => p.id === socket.id);
         if (playerIndex !== -1) {
+            const wasHost = lobby.hostId === socket.id;
             lobby.players.splice(playerIndex, 1);
             socket.leave(lobbyId);
             
-            if (lobby.players.length === 0) {
+            if (wasHost) {
+                io.to(lobbyId).emit('lobby-disbanded');
                 lobbies.delete(lobbyId);
+                io.in(lobbyId).socketsLeave(lobbyId);
             } else {
-                if (lobby.hostId === socket.id) {
-                    lobby.hostId = lobby.players[0].id; // Assign new host
+                if (lobby.players.length === 0) {
+                    lobbies.delete(lobbyId);
+                } else {
+                    io.to(lobbyId).emit('lobby-updated', lobby);
                 }
-                io.to(lobbyId).emit('lobby-updated', lobby);
             }
             io.emit('lobbies-update', Array.from(lobbies.values()));
             break;
