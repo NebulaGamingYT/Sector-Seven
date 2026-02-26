@@ -127,6 +127,21 @@ io.on('connection', (socket) => {
             socket.to(data.lobbyId).emit('spawn-particles', data);
         }
     });
+
+    socket.on('player-shoot', (data) => {
+        if (data.lobbyId) {
+            socket.to(data.lobbyId).emit('player-shoot', data);
+        }
+    });
+
+    socket.on('report-hit', (data) => {
+        if (data.lobbyId) {
+            const lobby = lobbies.get(data.lobbyId);
+            if (lobby) {
+                io.to(lobby.hostId).emit('report-hit', data);
+            }
+        }
+    });
 });
 
 function leaveLobby(socket) {
