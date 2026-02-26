@@ -42,6 +42,7 @@ io.on('connection', (socket) => {
         if (lobby && lobby.players.length < 4 && lobby.state === 'waiting') {
             lobby.players.push({ id: socket.id, name: username || `Player ${lobby.players.length + 1}`, ready: false, inventory: {} });
             socket.join(lobbyId);
+            socket.emit('join-success', lobby);
             io.to(lobbyId).emit('lobby-updated', lobby);
             io.emit('lobbies-update', Array.from(lobbies.values()));
         } else {
