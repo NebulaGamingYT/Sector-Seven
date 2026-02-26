@@ -142,6 +142,12 @@ io.on('connection', (socket) => {
             }
         }
     });
+
+    socket.on('show-upgrade', (data) => {
+        if (data.lobbyId) {
+            socket.to(data.lobbyId).emit('show-upgrade', data);
+        }
+    });
 });
 
 function leaveLobby(socket) {
