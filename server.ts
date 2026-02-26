@@ -23,7 +23,7 @@ io.on('connection', (socket) => {
             id: lobbyId,
             name: lobbyName,
             hostId: socket.id,
-            players: [{ id: socket.id, name: username || 'Player 1', ready: false }],
+            players: [{ id: socket.id, name: username || 'Player 1', ready: false, inventory: {} }],
             state: 'waiting',
             selectingCardPlayers: new Set()
         };
@@ -40,9 +40,8 @@ io.on('connection', (socket) => {
     socket.on('join-lobby', (lobbyId, username) => {
         const lobby = lobbies.get(lobbyId);
         if (lobby && lobby.players.length < 4 && lobby.state === 'waiting') {
-            lobby.players.push({ id: socket.id, name: username || `Player ${lobby.players.length + 1}`, ready: false });
+            lobby.players.push({ id: socket.id, name: username || `Player ${lobby.players.length + 1}`, ready: false, inventory: {} });
             socket.join(lobbyId);
-            socket.emit('join-success', lobbyId);
             io.to(lobbyId).emit('lobby-updated', lobby);
             io.emit('lobbies-update', Array.from(lobbies.values()));
         } else {
@@ -70,9 +69,18 @@ io.on('connection', (socket) => {
     // Game Sync Events
     socket.on('host-update', (data) => {
         // Broadcast game state from host to all other players in the lobby
-        // data should include lobbyId
         if (data.lobbyId) {
             socket.to(data.lobbyId).emit('game-state-update', data.state);
+        }
+    });
+
+    socket.on('client-update', (data) => {
+        // Client sends its state, host relays it to other clients
+        if (data.lobbyId) {
+            socket.to(data.lobbyId).emit('player-state-update', { 
+                playerId: socket.id, 
+                state: data.state 
+            });
         }
     });
 
@@ -82,6 +90,10 @@ io.on('connection', (socket) => {
         if (data.lobbyId) {
             const lobby = lobbies.get(data.lobbyId);
             if (lobby) {
+                const player = lobby.players.find(p => p.id === socket.id);
+                if (player) {
+                    player.inventory = data.input.playerData.inventory;
+                }
                 io.to(lobby.hostId).emit('player-input', { playerId: socket.id, input: data.input });
             }
         }
@@ -101,51 +113,41 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('initiate-upgrade-phase', (lobbyId) => {
+    socket.on('started-selecting-card', (lobbyId) => {
         const lobby = lobbies.get(lobbyId);
-        if (lobby && lobby.hostId === socket.id) {
-            lobby.state = 'upgrading';
-            lobby.selectingCardPlayers.clear();
-            io.to(lobbyId).emit('start-upgrade-phase');
+        if (lobby) {
+            lobby.selectingCardPlayers.add(socket.id);
+            io.to(lobbyId).emit('force-pause-selection', true);
         }
     });
 
     socket.on('finished-selecting-card', (lobbyId) => {
         const lobby = lobbies.get(lobbyId);
         if (lobby) {
-            lobby.selectingCardPlayers.add(socket.id);
-            if (lobby.selectingCardPlayers.size >= lobby.players.length) {
-                lobby.state = 'playing';
-                io.to(lobbyId).emit('end-upgrade-phase');
-                lobby.selectingCardPlayers.clear();
+            lobby.selectingCardPlayers.delete(socket.id);
+            if (lobby.selectingCardPlayers.size === 0) {
+                io.to(lobbyId).emit('force-pause-selection', false);
             }
         }
     });
 
-    socket.on('spawn-particles', (data) => {
+    socket.on('trigger-upgrade', (data) => {
+        // Host triggers upgrade for all players
         if (data.lobbyId) {
-            socket.to(data.lobbyId).emit('spawn-particles', data);
+            socket.to(data.lobbyId).emit('show-upgrade-modal', { 
+                isBossReward: data.isBossReward, 
+                forcedRarity: data.forcedRarity 
+            });
         }
     });
 
-    socket.on('player-shoot', (data) => {
+    socket.on('card-selected', (data) => {
         if (data.lobbyId) {
-            socket.to(data.lobbyId).emit('player-shoot', data);
-        }
-    });
-
-    socket.on('report-hit', (data) => {
-        if (data.lobbyId) {
-            const lobby = lobbies.get(data.lobbyId);
-            if (lobby) {
-                io.to(lobby.hostId).emit('report-hit', data);
-            }
-        }
-    });
-
-    socket.on('show-upgrade', (data) => {
-        if (data.lobbyId) {
-            socket.to(data.lobbyId).emit('show-upgrade', data);
+            io.to(data.lobbyId).emit('player-card-updated', { 
+                playerId: socket.id, 
+                cardId: data.cardId, 
+                inventory: data.inventory 
+            });
         }
     });
 });
