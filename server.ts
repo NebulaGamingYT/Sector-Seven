@@ -67,9 +67,6 @@ async function initGoogleDrive() {
             console.log('Created new leaderboard sheet:', sheetId);
 
             // Move to folder (Drive API v3 requires adding parents)
-            // Note: create() puts it in root. We need to move it.
-            // Actually, v3 create allows parents but sheets.create doesn't directly support parents easily in one go usually, 
-            // so we move it.
             const fileId = sheetId;
             const file = await drive.files.get({ fileId: fileId, fields: 'parents' });
             const previousParents = file.data.parents.join(',');
@@ -93,7 +90,17 @@ async function initGoogleDrive() {
         await loadLeaderboardFromSheet();
 
     } catch (error) {
-        console.error('Error initializing Google Drive:', error);
+        console.error('---------------------------------------------------');
+        console.error('GOOGLE DRIVE INITIALIZATION FAILED');
+        console.error('The server will continue using LOCAL storage only.');
+        console.error('Reason:', error.message);
+        if (error.code === 403) {
+            console.error('ACTION REQUIRED: Enable the Google Drive and Sheets APIs in your Google Cloud Console.');
+            console.error('Links:');
+            console.error(' - Drive: https://console.developers.google.com/apis/api/drive.googleapis.com/overview');
+            console.error(' - Sheets: https://console.developers.google.com/apis/api/sheets.googleapis.com/overview');
+        }
+        console.error('---------------------------------------------------');
     }
 }
 
