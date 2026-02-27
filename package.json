@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
+    "start": "tsx server.ts",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit"
@@ -14,7 +15,7 @@
     "@types/node": "^22.19.11",
     "@types/socket.io": "^3.0.1",
     "express": "^5.2.1",
-    "googleapis": "^171.4.0",
+    "mongoose": "^8.2.0",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "tsx": "^4.21.0",
