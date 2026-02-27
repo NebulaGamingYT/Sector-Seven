@@ -58,6 +58,7 @@ async function initGoogleDrive() {
             sheetId = res.data.files[0].id;
             console.log('Found existing leaderboard sheet:', sheetId);
         } else {
+            console.log('No existing leaderboard sheet found. Creating new one...');
             // Create new sheet
             const sheetRes = await sheets.spreadsheets.create({
                 requestBody: {
@@ -133,16 +134,22 @@ async function loadLeaderboardFromSheet() {
 }
 
 async function saveScoreToSheet(username, wave) {
-    if (!sheetId || !authClient) return;
+    console.log(`saveScoreToSheet called for ${username}, wave ${wave}`);
+    if (!sheetId || !authClient) {
+        console.log('Cannot save to sheet: sheetId or authClient is missing.');
+        return;
+    }
     try {
+        console.log(`Appending to sheet ${sheetId}...`);
         const sheets = google.sheets({ version: 'v4', auth: authClient });
         const date = new Date().toISOString();
-        await sheets.spreadsheets.values.append({
+        const res = await sheets.spreadsheets.values.append({
             spreadsheetId: sheetId,
             range: 'Sheet1!A:C',
             valueInputOption: 'RAW',
             requestBody: { values: [[username, wave, date]] },
         });
+        console.log('Append response status:', res.status);
         // Reload to keep sync and sort
         await loadLeaderboardFromSheet();
     } catch (error) {
@@ -183,8 +190,12 @@ io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
     socket.on('record-score', (data) => {
+        console.log('Received record-score event:', data);
         const { username, wave } = data;
-        if (!username || !wave) return;
+        if (!username || !wave) {
+            console.log('Missing username or wave in record-score event');
+            return;
+        }
 
         // Optimistic update
         leaderboard.push({ username, wave, date: new Date().toISOString() });
@@ -194,7 +205,12 @@ io.on('connection', (socket) => {
         io.emit('leaderboard-update', leaderboard);
         
         // Save to Drive (async)
-        saveScoreToSheet(username, wave);
+        if (USE_GOOGLE_DRIVE) {
+            console.log('Attempting to save score to Google Sheet...');
+            saveScoreToSheet(username, wave);
+        } else {
+            console.log('Google Drive disabled, skipping sheet save.');
+        }
         saveLeaderboard(); // Local backup
     });
 
