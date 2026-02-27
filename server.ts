@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
+import { google } from 'googleapis';
 
 const app = express();
 const httpServer = createServer(app);
@@ -12,10 +13,178 @@ const io = new Server(httpServer, {
     }
 });
 
+const fs = require('fs');
+const path = require('path');
+
 const lobbies = new Map();
+const LEADERBOARD_FILE = path.join(__dirname, 'leaderboard.json');
+let leaderboard = [];
+
+// Google Drive Configuration
+const FOLDER_ID = '1n6W6Kk651Jg_HnrsUMG30Br-lQBfS_LB';
+const SERVICE_ACCOUNT_EMAIL = 'leaderboard-bot@crafty-elf-488704-q6.iam.gserviceaccount.com';
+const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDPQVDcGYBrJsTP\nhVVPp8VPzMR9RMcUSkIOYZSKANmyq+ZqHZxKxy3Ee7vF3JyT8GF15z8tJBbUdmYM\nJwRVdNcH7M2AvoWRj/2QgW8jvgW1SOZr2cCZxL4liWlgDwEsnMjeU0MR6VfFCm5A\njJVraCosOwK5BK5tvfpuLcPfAcMQesQQVnBuHtlTTI0tVW3QRNMgw3JMZrYBqdIh\ngqDC+PLwQrWxVXiTWg9RDFoaNQu+GWWTGVTXogQcxcMdmNVFLrTgBZdcFYdzwHkY\naa67Sv+EbajdRPb5bPlbYr2OfgtGaccC1WAEHTRoz39A+xqBtMCNXQ0m8fL9dCKu\nNmijkrzDAgMBAAECggEAF+zc1kO1YOk9UA1+zy65ZuBnEGT3rF50KK/YE2RMvUT9\n2OMpLzK2FFgKUamJg8R8o705vE7NueIfHqkEZY8S4a3S/VlBFxAtv9hJSbF+fDJ5\nsxqUksu0/aVSvk2NH6bLw2qONAuhX7Q4DQiNmTQRpkB7rHsfXbjQJ5bt5RkReR3V\nrPtOS/ZBIIW75I42VPbza1HiFBLXYFwk+PhF9kVlKruxkNABHOtRCo0shV4Igka/\naX+uyFIF16OJOwWIm02apO72sqwbxVoZzWYeTO70fD+KBmRDEdEitumQ6cxPuQlL\nXRHAH/4Sch8LDRGuLbVrzSaxpv7KPmn1Km5mLJsoqQKBgQD0amGhI7AIyhRJqv+t\nKi/Kxavw+w19zlWwEzE9KoVmUbSQg1kvDuFHwrB1Sx3Mo9QFDla7vErtM8lW21Gk\nsy38dMu1SL0sH+oLpkP7U4DDLU1ZiP77OceA0rC/omPhubiACs97V8tWtabVP0au\n9Ws3hG2p2iqLiBFM5RxQNxgr2QKBgQDZFAxZ90qn54N4m5digYcaldL0AzPqP49w\ngUpeuKt36AFErrPCIowrgCPJyb4a3mc5ssJrW6N9YejaJS9/uPW95jkRCbDlM3WL\nbRutlWUL5QY2MKY8gvOImvVNG3wFQ4Auk43/0dsulSUjnbBz5IzA92Pulj4mXVZl\nokVWKSFX+wKBgQDfTK3jjXpPnWgJoeuzZj6BsDUVlhhOXwuUMQSkUEvOHkmsWgRJ\n5PtXF30lvDn+c5LKB76gCDggHFcPPpKJuZYC9yYBevIx9PpcKEwlurWCG8p2SZ5D\nIheuD0+h1RgR6x6wBLBojN5eWtmQLB5EzD1nXFrgekyya976dLt4Yc14iQKBgEq1\nfqa72AK/R90LV2d8gp3gsHBwZb6Zz2j95jWBQuoKe91CbvVCZJFYEXkSKI4gus/9\nuLGwIS02tCfXomhHpLONd1hoyGupcSviCiOMhfE5ChE+Xwf2XZBHHGNEMUOyfnwJ\nJlbDx7ZZeCWw0JiiMNr8iXUEWjFj8CccWNaVYzdfAoGAf21h/vPvuvo5Jd6wf5Di\n5fMdlCCubLFvh6X9aGHObdKhou2SK6TXd+PGKsKLZJBu73aQJ0Tt8LGFyWdy7qG8\nZrP2MY6En7TY+d9rU9FE71xmPaukECGMyaG6XzfpGMV7ShKz0xlBk70EzGKceOBA\nid+oZe/z2JdskN1PBonmgG0=\n-----END PRIVATE KEY-----`;
+
+let authClient;
+let sheetId = null;
+
+async function initGoogleDrive() {
+    try {
+        const auth = new google.auth.GoogleAuth({
+            credentials: {
+                client_email: SERVICE_ACCOUNT_EMAIL,
+                private_key: PRIVATE_KEY,
+            },
+            scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'],
+        });
+        authClient = await auth.getClient();
+        console.log('Google Auth successful');
+
+        const drive = google.drive({ version: 'v3', auth: authClient });
+        const sheets = google.sheets({ version: 'v4', auth: authClient });
+
+        // Check if leaderboard sheet exists in folder
+        const res = await drive.files.list({
+            q: `'${FOLDER_ID}' in parents and name = 'Leaderboard' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`,
+            fields: 'files(id, name)',
+        });
+
+        if (res.data.files.length > 0) {
+            sheetId = res.data.files[0].id;
+            console.log('Found existing leaderboard sheet:', sheetId);
+        } else {
+            // Create new sheet
+            const sheetRes = await sheets.spreadsheets.create({
+                requestBody: {
+                    properties: { title: 'Leaderboard' },
+                },
+            });
+            sheetId = sheetRes.data.spreadsheetId;
+            console.log('Created new leaderboard sheet:', sheetId);
+
+            // Move to folder (Drive API v3 requires adding parents)
+            // Note: create() puts it in root. We need to move it.
+            // Actually, v3 create allows parents but sheets.create doesn't directly support parents easily in one go usually, 
+            // so we move it.
+            const fileId = sheetId;
+            const file = await drive.files.get({ fileId: fileId, fields: 'parents' });
+            const previousParents = file.data.parents.join(',');
+            await drive.files.update({
+                fileId: fileId,
+                addParents: FOLDER_ID,
+                removeParents: previousParents,
+                fields: 'id, parents',
+            });
+            
+            // Initialize header
+            await sheets.spreadsheets.values.update({
+                spreadsheetId: sheetId,
+                range: 'Sheet1!A1:C1',
+                valueInputOption: 'RAW',
+                requestBody: { values: [['Username', 'Wave', 'Date']] },
+            });
+        }
+        
+        // Initial load
+        await loadLeaderboardFromSheet();
+
+    } catch (error) {
+        console.error('Error initializing Google Drive:', error);
+    }
+}
+
+async function loadLeaderboardFromSheet() {
+    if (!sheetId || !authClient) return;
+    try {
+        const sheets = google.sheets({ version: 'v4', auth: authClient });
+        const res = await sheets.spreadsheets.values.get({
+            spreadsheetId: sheetId,
+            range: 'Sheet1!A2:C', // Skip header
+        });
+        
+        const rows = res.data.values;
+        if (rows && rows.length) {
+            leaderboard = rows.map(row => ({
+                username: row[0],
+                wave: parseInt(row[1]) || 0,
+                date: row[2]
+            }));
+            // Sort
+            leaderboard.sort((a, b) => b.wave - a.wave);
+            if (leaderboard.length > 100) leaderboard = leaderboard.slice(0, 100);
+        } else {
+            leaderboard = [];
+        }
+    } catch (error) {
+        console.error('Error loading leaderboard from sheet:', error);
+    }
+}
+
+async function saveScoreToSheet(username, wave) {
+    if (!sheetId || !authClient) return;
+    try {
+        const sheets = google.sheets({ version: 'v4', auth: authClient });
+        const date = new Date().toISOString();
+        await sheets.spreadsheets.values.append({
+            spreadsheetId: sheetId,
+            range: 'Sheet1!A:C',
+            valueInputOption: 'RAW',
+            requestBody: { values: [[username, wave, date]] },
+        });
+        // Reload to keep sync and sort
+        await loadLeaderboardFromSheet();
+    } catch (error) {
+        console.error('Error saving score to sheet:', error);
+    }
+}
+
+// Initialize Drive
+initGoogleDrive();
+
+// Load leaderboard on startup (fallback to local if drive fails initially)
+try {
+    if (fs.existsSync(LEADERBOARD_FILE)) {
+        const data = fs.readFileSync(LEADERBOARD_FILE, 'utf8');
+        // Only use local if drive hasn't loaded anything yet
+        if (leaderboard.length === 0) {
+             leaderboard = JSON.parse(data);
+        }
+    }
+} catch (err) {
+    console.error('Error loading local leaderboard:', err);
+}
+
+function saveLeaderboard() {
+    // Save locally as backup
+    try {
+        fs.writeFileSync(LEADERBOARD_FILE, JSON.stringify(leaderboard, null, 2));
+    } catch (err) {
+        console.error('Error saving local leaderboard:', err);
+    }
+}
 
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
+
+    socket.on('record-score', (data) => {
+        const { username, wave } = data;
+        if (!username || !wave) return;
+
+        // Optimistic update
+        leaderboard.push({ username, wave, date: new Date().toISOString() });
+        leaderboard.sort((a, b) => b.wave - a.wave);
+        if (leaderboard.length > 100) leaderboard = leaderboard.slice(0, 100);
+        
+        io.emit('leaderboard-update', leaderboard);
+        
+        // Save to Drive (async)
+        saveScoreToSheet(username, wave);
+        saveLeaderboard(); // Local backup
+    });
+
+    socket.on('get-leaderboard', () => {
+        socket.emit('leaderboard-update', leaderboard);
+    });
 
     socket.on('create-lobby', (lobbyName, username) => {
         const lobbyId = Math.random().toString(36).substring(2, 9);
