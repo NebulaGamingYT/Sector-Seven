@@ -39,6 +39,7 @@ async function connectDB() {
     try {
         await mongoose.connect(MONGO_URI);
         console.log('MongoDB Connected successfully');
+        await cleanupLeaderboard();
         await loadLeaderboard();
     } catch (err) {
         console.error('MongoDB connection error:', err.message);
@@ -69,29 +70,86 @@ async function connectDB() {
 async function loadLeaderboard() {
     try {
         if (mongoose.connection.readyState === 1) {
-            const scores = await LeaderboardModel.find().sort({ wave: -1 }).limit(100);
-            leaderboard = scores.map(s => ({
-                username: s.username,
-                wave: s.wave,
-                date: s.date
-            }));
-            console.log('Leaderboard loaded from MongoDB');
+            // Use aggregation to ensure unique usernames with their highest wave
+            const scores = await LeaderboardModel.aggregate([
+                { $sort: { wave: -1 } },
+                { $group: {
+                    _id: "$username",
+                    wave: { $first: "$wave" },
+                    date: { $first: "$date" }
+                }},
+                { $project: {
+                    _id: 0,
+                    username: "$_id",
+                    wave: 1,
+                    date: 1
+                }},
+                { $sort: { wave: -1 } },
+                { $limit: 100 }
+            ]);
+            leaderboard = scores;
+            console.log('Leaderboard loaded from MongoDB (unique players)');
         }
     } catch (err) {
         console.error('Error loading leaderboard from MongoDB:', err);
     }
 }
 
+async function cleanupLeaderboard() {
+    try {
+        if (mongoose.connection.readyState === 1) {
+            console.log('Starting leaderboard cleanup...');
+            const allScores = await LeaderboardModel.find().sort({ username: 1, wave: -1 });
+            const seen = new Set();
+            const toDelete = [];
+            
+            for (const score of allScores) {
+                if (seen.has(score.username)) {
+                    toDelete.push(score._id);
+                } else {
+                    seen.add(score.username);
+                }
+            }
+            
+            if (toDelete.length > 0) {
+                await LeaderboardModel.deleteMany({ _id: { $in: toDelete } });
+                console.log(`Cleanup complete: Deleted ${toDelete.length} duplicate/lower entries`);
+            } else {
+                console.log('Cleanup complete: No duplicates found');
+            }
+        }
+    } catch (err) {
+        console.error('Error during leaderboard cleanup:', err);
+    }
+}
+
 async function saveScore(username, wave) {
     try {
         if (mongoose.connection.readyState === 1) {
-            const newScore = new LeaderboardModel({
-                username,
-                wave,
-                date: new Date()
-            });
-            await newScore.save();
-            console.log(`Score saved to MongoDB: ${username} - Wave ${wave}`);
+            const existingScore = await LeaderboardModel.findOne({ username });
+            
+            if (existingScore) {
+                if (wave > existingScore.wave) {
+                    existingScore.wave = wave;
+                    existingScore.date = new Date();
+                    await existingScore.save();
+                    console.log(`Score updated for ${username}: Wave ${wave}`);
+                } else {
+                    console.log(`Score for ${username} not updated (existing ${existingScore.wave} >= new ${wave})`);
+                }
+            } else {
+                const newScore = new LeaderboardModel({
+                    username,
+                    wave,
+                    date: new Date()
+                });
+                await newScore.save();
+                console.log(`New score saved for ${username}: Wave ${wave}`);
+            }
+            
+            // Insurance: delete any other entries that might have slipped in
+            await LeaderboardModel.deleteMany({ username, wave: { $lt: wave } });
+            
             await loadLeaderboard();
         }
     } catch (err) {
@@ -133,14 +191,23 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // Optimistic update
-        leaderboard.push({ username, wave, date: new Date().toISOString() });
+        // Optimistic update handling duplicates
+        const existingIdx = leaderboard.findIndex(s => s.username === username);
+        if (existingIdx !== -1) {
+            if (wave > leaderboard[existingIdx].wave) {
+                leaderboard[existingIdx].wave = wave;
+                leaderboard[existingIdx].date = new Date().toISOString();
+            }
+        } else {
+            leaderboard.push({ username, wave, date: new Date().toISOString() });
+        }
+        
         leaderboard.sort((a, b) => b.wave - a.wave);
         if (leaderboard.length > 100) leaderboard = leaderboard.slice(0, 100);
         
         io.emit('leaderboard-update', leaderboard);
         
-        // Save to DB
+        // Save to DB (handles unique names internally)
         await saveScore(username, wave);
         saveLocalLeaderboard(); // Keep local backup synced
     });
