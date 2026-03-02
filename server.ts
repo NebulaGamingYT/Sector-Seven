@@ -20,6 +20,18 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Email Block Middleware
+app.use((req, res, next) => {
+    const userEmail = req.headers['x-goog-authenticated-user-email'] || req.headers['x-replit-user-email'];
+    if (userEmail && typeof userEmail === 'string') {
+        const email = userEmail.replace('accounts.google.com:', '');
+        if (email === '1973136466@hcboe.us') {
+            return res.status(403).send('Access Denied: Your account has been permanently banned from Sector Seven.');
+        }
+    }
+    next();
+});
+
 const lobbies = new Map();
 const LEADERBOARD_FILE = path.join(__dirname, 'leaderboard.json');
 let leaderboard = [];
@@ -34,6 +46,18 @@ const leaderboardSchema = new mongoose.Schema({
 });
 
 const LeaderboardModel = mongoose.model('Leaderboard', leaderboardSchema);
+
+// Email Block Middleware
+app.use((req, res, next) => {
+    const userEmail = req.headers['x-goog-authenticated-user-email'] || req.headers['x-replit-user-email'];
+    if (userEmail && typeof userEmail === 'string') {
+        const email = userEmail.replace('accounts.google.com:', '');
+        if (email === '1973136466@hcboe.us') {
+            return res.status(403).send('Access Denied: Your account has been permanently banned from Sector Seven.');
+        }
+    }
+    next();
+});
 
 async function connectDB() {
     try {
