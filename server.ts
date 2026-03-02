@@ -180,6 +180,25 @@ function saveLocalLeaderboard() {
 // Initialize DB
 connectDB();
 
+const PROFANITY_LIST = ['fuck', 'shit', 'bitch', 'ass', 'cunt', 'nigger', 'nigga', 'faggot', 'fag', 'slut', 'whore', 'dick', 'cock', 'pussy', 'bastard', 'crap', 'damn', 'twat', 'wanker', 'prick', 'retard', 'spic', 'chink', 'gook', 'kike', 'dyke', 'tranny', 'cum', 'rape', 'hitler', 'nazi', 'pedophile', 'porn', 'sex', 'jigaboo', 'jiggaboo'];
+function containsProfanity(text) {
+    if (!text) return false;
+    const lower = text.toLowerCase().replace(/[\s\._\-]/g, '');
+    const normalized = lower
+        .replace(/0/g, 'o')
+        .replace(/1/g, 'i')
+        .replace(/3/g, 'e')
+        .replace(/4/g, 'a')
+        .replace(/5/g, 's')
+        .replace(/7/g, 't')
+        .replace(/8/g, 'b')
+        .replace(/@/g, 'a')
+        .replace(/\$/g, 's')
+        .replace(/!/g, 'i');
+    
+    return PROFANITY_LIST.some(word => normalized.includes(word));
+}
+
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
@@ -218,6 +237,10 @@ io.on('connection', (socket) => {
     });
 
     socket.on('create-lobby', (lobbyName, username) => {
+        if (containsProfanity(lobbyName) || containsProfanity(username)) {
+            socket.emit('join-error', 'Inappropriate content detected in lobby name or username.');
+            return;
+        }
         const lobbyId = Math.random().toString(36).substring(2, 9);
         const lobby = {
             id: lobbyId,
@@ -238,6 +261,10 @@ io.on('connection', (socket) => {
     });
 
     socket.on('join-lobby', (lobbyId, username) => {
+        if (containsProfanity(username)) {
+            socket.emit('join-error', 'Inappropriate username detected.');
+            return;
+        }
         const lobby = lobbies.get(lobbyId);
         if (lobby && lobby.players.length < 4 && lobby.state === 'waiting') {
             lobby.players.push({ id: socket.id, name: username || `Player ${lobby.players.length + 1}`, ready: false, inventory: {} });
