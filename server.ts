@@ -231,6 +231,32 @@ function containsProfanity(text) {
     return PROFANITY_LIST.some(word => normalized.includes(word));
 }
 
+// Socket.IO Middleware for Ban Enforcement
+io.use((socket, next) => {
+    const headers = socket.handshake.headers;
+    
+    // DEBUG: Log all headers to find the correct email header
+    console.log(`[Socket Handshake] ID: ${socket.id}`);
+    console.log(`[Socket Handshake] Headers:`, JSON.stringify(headers, null, 2));
+
+    const userEmail = headers['x-goog-authenticated-user-email'] || 
+                      headers['x-replit-user-email'] || 
+                      headers['x-forwarded-user-email'];
+    
+    if (userEmail && typeof userEmail === 'string') {
+        const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
+        const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
+        
+        if (bannedEmails.includes(email)) {
+            console.log(`Blocked banned user attempt: ${email} (Socket ID: ${socket.id})`);
+            const err = new Error('Access Denied: Your account has been permanently banned.');
+            (err as any).data = { content: "You are banned." }; // Additional context
+            return next(err);
+        }
+    }
+    next();
+});
+
 io.on('connection', (socket) => {
     const userEmail = socket.handshake.headers['x-goog-authenticated-user-email'] || socket.handshake.headers['x-replit-user-email'] || socket.handshake.headers['x-forwarded-user-email'];
     if (userEmail && typeof userEmail === 'string') {
@@ -303,6 +329,20 @@ io.on('connection', (socket) => {
     });
 
     socket.on('join-lobby', (lobbyId, username) => {
+        // Redundant Ban Check
+        const userEmail = socket.handshake.headers['x-goog-authenticated-user-email'] || 
+                          socket.handshake.headers['x-replit-user-email'] || 
+                          socket.handshake.headers['x-forwarded-user-email'];
+        if (userEmail && typeof userEmail === 'string') {
+            const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
+            const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
+            if (bannedEmails.includes(email)) {
+                socket.emit('error', 'Access Denied: Your account has been permanently banned.');
+                socket.disconnect(true);
+                return;
+            }
+        }
+
         if (containsProfanity(username)) {
             socket.emit('join-error', 'Inappropriate username detected.');
             return;
