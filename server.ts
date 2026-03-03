@@ -30,7 +30,26 @@ app.use((req, res, next) => {
             return res.status(403).send('Access Denied: Your account has been permanently banned from Sector Seven.');
         }
     }
+    // Prevent caching of the main page to ensure ban check always runs
+    if (req.path === '/' || req.path === '/index.html') {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.setHeader('Surrogate-Control', 'no-store');
+    }
     next();
+});
+
+app.get('/api/check-ban', (req, res) => {
+    const userEmail = req.headers['x-goog-authenticated-user-email'] || req.headers['x-replit-user-email'] || req.headers['x-forwarded-user-email'];
+    if (userEmail && typeof userEmail === 'string') {
+        const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
+        const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
+        if (bannedEmails.includes(email)) {
+            return res.json({ banned: true });
+        }
+    }
+    res.json({ banned: false });
 });
 
 const lobbies = new Map();
