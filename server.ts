@@ -22,10 +22,11 @@ const __dirname = path.dirname(__filename);
 
 // Email Block Middleware
 app.use((req, res, next) => {
-    const userEmail = req.headers['x-goog-authenticated-user-email'] || req.headers['x-replit-user-email'];
+    const userEmail = req.headers['x-goog-authenticated-user-email'] || req.headers['x-replit-user-email'] || req.headers['x-forwarded-user-email'];
     if (userEmail && typeof userEmail === 'string') {
-        const email = userEmail.replace('accounts.google.com:', '');
-        if (email === '1973136466@hcboe.us') {
+        const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
+        const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
+        if (bannedEmails.includes(email)) {
             return res.status(403).send('Access Denied: Your account has been permanently banned from Sector Seven.');
         }
     }
@@ -46,18 +47,6 @@ const leaderboardSchema = new mongoose.Schema({
 });
 
 const LeaderboardModel = mongoose.model('Leaderboard', leaderboardSchema);
-
-// Email Block Middleware
-app.use((req, res, next) => {
-    const userEmail = req.headers['x-goog-authenticated-user-email'] || req.headers['x-replit-user-email'];
-    if (userEmail && typeof userEmail === 'string') {
-        const email = userEmail.replace('accounts.google.com:', '');
-        if (email === '1973136466@hcboe.us') {
-            return res.status(403).send('Access Denied: Your account has been permanently banned from Sector Seven.');
-        }
-    }
-    next();
-});
 
 async function connectDB() {
     try {
@@ -224,6 +213,16 @@ function containsProfanity(text) {
 }
 
 io.on('connection', (socket) => {
+    const userEmail = socket.handshake.headers['x-goog-authenticated-user-email'] || socket.handshake.headers['x-replit-user-email'] || socket.handshake.headers['x-forwarded-user-email'];
+    if (userEmail && typeof userEmail === 'string') {
+        const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
+        const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
+        if (bannedEmails.includes(email)) {
+            socket.emit('error', 'Access Denied: Your account has been permanently banned.');
+            socket.disconnect(true);
+            return;
+        }
+    }
     console.log('User connected:', socket.id);
 
     socket.on('record-score', async (data) => {
