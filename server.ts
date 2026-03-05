@@ -284,6 +284,19 @@ io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
     socket.on('record-score', async (data) => {
+        // Ban Check
+        const userEmail = socket.handshake.headers['x-goog-authenticated-user-email'] || 
+                          socket.handshake.headers['x-replit-user-email'] || 
+                          socket.handshake.headers['x-forwarded-user-email'];
+        if (userEmail && typeof userEmail === 'string') {
+            const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
+            const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
+            if (bannedEmails.includes(email)) {
+                console.log(`Banned user ${email} attempted to record score.`);
+                return;
+            }
+        }
+
         console.log('Received record-score event:', data);
         const { username, wave } = data;
         if (!username || !wave) {
