@@ -3,6 +3,9 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
 import mongoose from 'mongoose';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 const app = express();
 const httpServer = createServer(app);
@@ -15,119 +18,28 @@ const io = new Server(httpServer, {
 
 app.use(express.json({ limit: '1mb' })); // Enable JSON body parsing
 
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+// Ban Check API
+app.get('/api/check-ban', (req, res) => {
+    const userEmail = req.headers['x-goog-authenticated-user-email'] || 
+                      req.headers['x-replit-user-email'] || 
+                      req.headers['x-forwarded-user-email'];
+    
+    let banned = false;
+    let email = null;
+
+    if (userEmail && typeof userEmail === 'string') {
+        email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
+        const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
+        if (bannedEmails.includes(email)) {
+            banned = true;
+        }
+    }
+
+    res.json({ banned, email });
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Email Block Middleware
-app.use((req, res, next) => {
-    const userEmail = req.headers['x-goog-authenticated-user-email'] || req.headers['x-replit-user-email'] || req.headers['x-forwarded-user-email'];
-    if (userEmail && typeof userEmail === 'string') {
-        const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
-        const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
-        if (bannedEmails.includes(email)) {
-            return res.status(403).send('Access Denied: Your account has been permanently banned from Sector Seven.');
-        }
-    }
-    // Prevent caching of the main page to ensure ban check always runs
-    if (req.path === '/' || req.path === '/index.html') {
-        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
-        res.setHeader('Surrogate-Control', 'no-store');
-    }
-    next();
-});
-
-app.get('/api/check-ban', (req, res) => {
-    const userEmail = req.headers['x-goog-authenticated-user-email'] || req.headers['x-replit-user-email'] || req.headers['x-forwarded-user-email'];
-    if (userEmail && typeof userEmail === 'string') {
-        const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
-        const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
-        if (bannedEmails.includes(email)) {
-            return res.json({ banned: true });
-        }
-    }
-    res.json({ banned: false });
-});
-
-app.get('/api/player/data', async (req, res) => {
-    const userEmail = req.headers['x-goog-authenticated-user-email'] || req.headers['x-replit-user-email'] || req.headers['x-forwarded-user-email'];
-    if (!userEmail || typeof userEmail !== 'string') {
-        return res.status(401).json({ error: 'Not authenticated' });
-    }
-    const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
-    
-    // Ban check
-    const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
-    if (bannedEmails.includes(email)) {
-        return res.status(403).json({ error: 'Banned' });
-    }
-
-    try {
-        if (mongoose.connection.readyState !== 1) {
-            return res.status(503).json({ error: 'Database not connected' });
-        }
-
-        let player = await PlayerModel.findOne({ email });
-        if (!player) {
-            player = new PlayerModel({ email });
-            await player.save();
-            console.log(`Created new player profile for ${email}`);
-        }
-        res.json(player);
-    } catch (err) {
-        console.error('Error fetching player data:', err);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-app.post('/api/player/data', async (req, res) => {
-    const userEmail = req.headers['x-goog-authenticated-user-email'] || req.headers['x-replit-user-email'] || req.headers['x-forwarded-user-email'];
-    if (!userEmail || typeof userEmail !== 'string') {
-        return res.status(401).json({ error: 'Not authenticated' });
-    }
-    const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
-
-    // Ban check
-    const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
-    if (bannedEmails.includes(email)) {
-        return res.status(403).json({ error: 'Banned' });
-    }
-
-    try {
-        if (mongoose.connection.readyState !== 1) {
-            return res.status(503).json({ error: 'Database not connected' });
-        }
-
-        const updateData = req.body;
-        // Whitelist allowed fields to prevent arbitrary data injection
-        const allowedFields = ['username', 'dataShards', 'bestWave', 'maxDamage', 'maxCards', 'totalShardsEver', 'seenCards', 'purchasedUpgrades', 'usedCodes'];
-        const safeUpdate: any = {};
-        
-        for (const field of allowedFields) {
-            if (updateData[field] !== undefined) {
-                safeUpdate[field] = updateData[field];
-            }
-        }
-        safeUpdate.lastLogin = new Date();
-
-        const player = await PlayerModel.findOneAndUpdate(
-            { email },
-            { $set: safeUpdate },
-            { new: true, upsert: true }
-        );
-        
-        console.log(`Updated player data for ${email}`);
-        res.json({ success: true, player });
-    } catch (err) {
-        console.error('Error updating player data:', err);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
 
 const lobbies = new Map();
 const LEADERBOARD_FILE = path.join(__dirname, 'leaderboard.json');
@@ -143,22 +55,6 @@ const leaderboardSchema = new mongoose.Schema({
 });
 
 const LeaderboardModel = mongoose.model('Leaderboard', leaderboardSchema);
-
-const playerSchema = new mongoose.Schema({
-    email: { type: String, required: true, unique: true },
-    username: { type: String, default: 'Player' },
-    dataShards: { type: Number, default: 0 },
-    bestWave: { type: Number, default: 0 },
-    maxDamage: { type: Number, default: 0 },
-    maxCards: { type: Number, default: 0 },
-    totalShardsEver: { type: Number, default: 0 },
-    seenCards: { type: [String], default: [] },
-    purchasedUpgrades: { type: Object, default: {} },
-    usedCodes: { type: [String], default: [] },
-    lastLogin: { type: Date, default: Date.now }
-});
-
-const PlayerModel = mongoose.model('Player', playerSchema);
 
 async function connectDB() {
     try {
@@ -324,43 +220,7 @@ function containsProfanity(text) {
     return PROFANITY_LIST.some(word => normalized.includes(word));
 }
 
-// Socket.IO Middleware for Ban Enforcement
-io.use((socket, next) => {
-    const headers = socket.handshake.headers;
-    
-    // DEBUG: Log all headers to find the correct email header
-    console.log(`[Socket Handshake] ID: ${socket.id}`);
-    console.log(`[Socket Handshake] Headers:`, JSON.stringify(headers, null, 2));
-
-    const userEmail = headers['x-goog-authenticated-user-email'] || 
-                      headers['x-replit-user-email'] || 
-                      headers['x-forwarded-user-email'];
-    
-    if (userEmail && typeof userEmail === 'string') {
-        const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
-        const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
-        
-        if (bannedEmails.includes(email)) {
-            console.log(`Blocked banned user attempt: ${email} (Socket ID: ${socket.id})`);
-            const err = new Error('Access Denied: Your account has been permanently banned.');
-            (err as any).data = { content: "You are banned." }; // Additional context
-            return next(err);
-        }
-    }
-    next();
-});
-
 io.on('connection', (socket) => {
-    const userEmail = socket.handshake.headers['x-goog-authenticated-user-email'] || socket.handshake.headers['x-replit-user-email'] || socket.handshake.headers['x-forwarded-user-email'];
-    if (userEmail && typeof userEmail === 'string') {
-        const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
-        const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
-        if (bannedEmails.includes(email)) {
-            socket.emit('error', 'Access Denied: Your account has been permanently banned.');
-            socket.disconnect(true);
-            return;
-        }
-    }
     console.log('User connected:', socket.id);
 
     socket.on('record-score', async (data) => {
