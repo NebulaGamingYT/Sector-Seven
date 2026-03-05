@@ -38,6 +38,49 @@ app.get('/api/check-ban', (req, res) => {
     res.json({ banned, email });
 });
 
+// Auth Config API
+app.get('/api/auth/config', (req, res) => {
+    res.json({ 
+        clientId: process.env.GOOGLE_CLIENT_ID || '705855269324-6odeb4vu486smrev2lah486ud9rh9ao2.apps.googleusercontent.com',
+        // Do not expose client secret
+    });
+});
+
+// Player Data API
+app.post('/api/player/load', async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+
+    try {
+        const player = await PlayerModel.findOne({ email: email.toLowerCase() });
+        if (player) {
+            res.json({ data: player.data });
+        } else {
+            res.json({ data: null });
+        }
+    } catch (err) {
+        console.error('Error loading player data:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+app.post('/api/player/save', async (req, res) => {
+    const { email, data } = req.body;
+    if (!email || !data) return res.status(400).json({ error: 'Email and data required' });
+
+    try {
+        await PlayerModel.findOneAndUpdate(
+            { email: email.toLowerCase() },
+            { data, lastUpdated: new Date() },
+            { upsert: true, new: true }
+        );
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error saving player data:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -55,6 +98,23 @@ const leaderboardSchema = new mongoose.Schema({
 });
 
 const LeaderboardModel = mongoose.model('Leaderboard', leaderboardSchema);
+
+const playerSchema = new mongoose.Schema({
+    email: { type: String, unique: true, required: true },
+    data: {
+        totalDataShards: Number,
+        bestWave: Number,
+        maxDamage: Number,
+        maxCards: Number,
+        totalShardsEver: Number,
+        seenCards: [String],
+        purchasedUpgrades: mongoose.Schema.Types.Mixed,
+        username: String
+    },
+    lastUpdated: { type: Date, default: Date.now }
+});
+
+const PlayerModel = mongoose.model('Player', playerSchema);
 
 async function connectDB() {
     try {
