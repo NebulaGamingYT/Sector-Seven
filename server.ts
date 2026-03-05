@@ -13,6 +13,8 @@ const io = new Server(httpServer, {
     }
 });
 
+app.use(express.json({ limit: '1mb' })); // Enable JSON body parsing
+
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -52,6 +54,81 @@ app.get('/api/check-ban', (req, res) => {
     res.json({ banned: false });
 });
 
+app.get('/api/player/data', async (req, res) => {
+    const userEmail = req.headers['x-goog-authenticated-user-email'] || req.headers['x-replit-user-email'] || req.headers['x-forwarded-user-email'];
+    if (!userEmail || typeof userEmail !== 'string') {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
+    
+    // Ban check
+    const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
+    if (bannedEmails.includes(email)) {
+        return res.status(403).json({ error: 'Banned' });
+    }
+
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ error: 'Database not connected' });
+        }
+
+        let player = await PlayerModel.findOne({ email });
+        if (!player) {
+            player = new PlayerModel({ email });
+            await player.save();
+            console.log(`Created new player profile for ${email}`);
+        }
+        res.json(player);
+    } catch (err) {
+        console.error('Error fetching player data:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+app.post('/api/player/data', async (req, res) => {
+    const userEmail = req.headers['x-goog-authenticated-user-email'] || req.headers['x-replit-user-email'] || req.headers['x-forwarded-user-email'];
+    if (!userEmail || typeof userEmail !== 'string') {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
+
+    // Ban check
+    const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
+    if (bannedEmails.includes(email)) {
+        return res.status(403).json({ error: 'Banned' });
+    }
+
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ error: 'Database not connected' });
+        }
+
+        const updateData = req.body;
+        // Whitelist allowed fields to prevent arbitrary data injection
+        const allowedFields = ['username', 'dataShards', 'bestWave', 'maxDamage', 'maxCards', 'totalShardsEver', 'seenCards', 'purchasedUpgrades', 'usedCodes'];
+        const safeUpdate: any = {};
+        
+        for (const field of allowedFields) {
+            if (updateData[field] !== undefined) {
+                safeUpdate[field] = updateData[field];
+            }
+        }
+        safeUpdate.lastLogin = new Date();
+
+        const player = await PlayerModel.findOneAndUpdate(
+            { email },
+            { $set: safeUpdate },
+            { new: true, upsert: true }
+        );
+        
+        console.log(`Updated player data for ${email}`);
+        res.json({ success: true, player });
+    } catch (err) {
+        console.error('Error updating player data:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 const lobbies = new Map();
 const LEADERBOARD_FILE = path.join(__dirname, 'leaderboard.json');
 let leaderboard = [];
@@ -66,6 +143,22 @@ const leaderboardSchema = new mongoose.Schema({
 });
 
 const LeaderboardModel = mongoose.model('Leaderboard', leaderboardSchema);
+
+const playerSchema = new mongoose.Schema({
+    email: { type: String, required: true, unique: true },
+    username: { type: String, default: 'Player' },
+    dataShards: { type: Number, default: 0 },
+    bestWave: { type: Number, default: 0 },
+    maxDamage: { type: Number, default: 0 },
+    maxCards: { type: Number, default: 0 },
+    totalShardsEver: { type: Number, default: 0 },
+    seenCards: { type: [String], default: [] },
+    purchasedUpgrades: { type: Object, default: {} },
+    usedCodes: { type: [String], default: [] },
+    lastLogin: { type: Date, default: Date.now }
+});
+
+const PlayerModel = mongoose.model('Player', playerSchema);
 
 async function connectDB() {
     try {
