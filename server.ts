@@ -29,7 +29,7 @@ app.get('/api/check-ban', (req, res) => {
 
     if (userEmail && typeof userEmail === 'string') {
         email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
-        const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
+        const bannedEmails = ['sectorsevenstorage@gmail.com'];
         if (bannedEmails.includes(email)) {
             banned = true;
         }
@@ -290,7 +290,7 @@ io.on('connection', (socket) => {
                           socket.handshake.headers['x-forwarded-user-email'];
         if (userEmail && typeof userEmail === 'string') {
             const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
-            const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
+            const bannedEmails = ['sectorsevenstorage@gmail.com'];
             if (bannedEmails.includes(email)) {
                 console.log(`Banned user ${email} attempted to record score.`);
                 return;
@@ -361,7 +361,7 @@ io.on('connection', (socket) => {
                           socket.handshake.headers['x-forwarded-user-email'];
         if (userEmail && typeof userEmail === 'string') {
             const email = userEmail.replace('accounts.google.com:', '').toLowerCase().trim();
-            const bannedEmails = ['1973136466@hcboe.us', 'sectorsevenstorage@gmail.com'];
+            const bannedEmails = ['sectorsevenstorage@gmail.com'];
             if (bannedEmails.includes(email)) {
                 socket.emit('error', 'Access Denied: Your account has been permanently banned.');
                 socket.disconnect(true);
