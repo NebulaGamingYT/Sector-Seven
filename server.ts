@@ -94,6 +94,7 @@ const MONGO_URI = 'mongodb+srv://sectorseven:meow1234@sectorseven.db0g1vp.mongod
 const leaderboardSchema = new mongoose.Schema({
     username: String,
     wave: Number,
+    level: { type: Number, default: 1 },
     date: Date
 });
 
@@ -157,12 +158,14 @@ async function loadLeaderboard() {
                 { $group: {
                     _id: "$username",
                     wave: { $first: "$wave" },
+                    level: { $first: "$level" },
                     date: { $first: "$date" }
                 }},
                 { $project: {
                     _id: 0,
                     username: "$_id",
                     wave: 1,
+                    level: 1,
                     date: 1
                 }},
                 { $sort: { wave: -1 } },
@@ -204,7 +207,7 @@ async function cleanupLeaderboard() {
     }
 }
 
-async function saveScore(username, wave) {
+async function saveScore(username, wave, level) {
     try {
         if (mongoose.connection.readyState === 1) {
             const existingScore = await LeaderboardModel.findOne({ username });
@@ -212,20 +215,27 @@ async function saveScore(username, wave) {
             if (existingScore) {
                 if (wave > existingScore.wave) {
                     existingScore.wave = wave;
+                    existingScore.level = level || existingScore.level;
                     existingScore.date = new Date();
                     await existingScore.save();
-                    console.log(`Score updated for ${username}: Wave ${wave}`);
+                    console.log(`Score updated for ${username}: Wave ${wave} (Lv.${level})`);
                 } else {
+                    // Even if wave isn't higher, update level if it is
+                    if (level && level > (existingScore.level || 0)) {
+                        existingScore.level = level;
+                        await existingScore.save();
+                    }
                     console.log(`Score for ${username} not updated (existing ${existingScore.wave} >= new ${wave})`);
                 }
             } else {
                 const newScore = new LeaderboardModel({
                     username,
                     wave,
+                    level: level || 1,
                     date: new Date()
                 });
                 await newScore.save();
-                console.log(`New score saved for ${username}: Wave ${wave}`);
+                console.log(`New score saved for ${username}: Wave ${wave} (Lv.${level})`);
             }
             
             // Insurance: delete any other entries that might have slipped in
@@ -298,7 +308,7 @@ io.on('connection', (socket) => {
         }
 
         console.log('Received record-score event:', data);
-        const { username, wave } = data;
+        const { username, wave, level } = data;
         if (!username || !wave) {
             console.log('Missing username or wave in record-score event');
             return;
@@ -309,10 +319,13 @@ io.on('connection', (socket) => {
         if (existingIdx !== -1) {
             if (wave > leaderboard[existingIdx].wave) {
                 leaderboard[existingIdx].wave = wave;
+                leaderboard[existingIdx].level = level || leaderboard[existingIdx].level;
                 leaderboard[existingIdx].date = new Date().toISOString();
+            } else if (level > (leaderboard[existingIdx].level || 0)) {
+                leaderboard[existingIdx].level = level;
             }
         } else {
-            leaderboard.push({ username, wave, date: new Date().toISOString() });
+            leaderboard.push({ username, wave, level: level || 1, date: new Date().toISOString() });
         }
         
         leaderboard.sort((a, b) => b.wave - a.wave);
@@ -321,7 +334,7 @@ io.on('connection', (socket) => {
         io.emit('leaderboard-update', leaderboard);
         
         // Save to DB (handles unique names internally)
-        await saveScore(username, wave);
+        await saveScore(username, wave, level);
         saveLocalLeaderboard(); // Keep local backup synced
     });
 
@@ -330,7 +343,8 @@ io.on('connection', (socket) => {
         socket.emit('leaderboard-update', leaderboard);
     });
 
-    socket.on('create-lobby', (lobbyName, username) => {
+    socket.on('create-lobby', (data) => {
+        const { name: lobbyName, username, mode } = data;
         if (containsProfanity(lobbyName) || containsProfanity(username)) {
             socket.emit('join-error', 'Inappropriate content detected in lobby name or username.');
             return;
@@ -339,15 +353,31 @@ io.on('connection', (socket) => {
         const lobby = {
             id: lobbyId,
             name: lobbyName,
+            mode: mode || 'SURVIVAL',
             hostId: socket.id,
-            players: [{ id: socket.id, name: username || 'Player 1', ready: false, inventory: {} }],
+            players: [{ id: socket.id, name: username || 'Player 1', ready: false, inventory: {}, team: 1 }],
             state: 'waiting',
-            selectingCardPlayers: new Set()
+            selectingCardPlayers: new Set(),
+            chatHistory: []
         };
         lobbies.set(lobbyId, lobby);
         socket.join(lobbyId);
         socket.emit('lobby-created', lobby);
         io.emit('lobbies-update', Array.from(lobbies.values()));
+    });
+
+    socket.on('chat-message', (data) => {
+        const { lobbyId, message } = data;
+        const lobby = lobbies.get(lobbyId);
+        if (lobby && message && typeof message === 'string') {
+            const player = lobby.players.find(p => p.id === socket.id);
+            if (player) {
+                const chatData = { username: player.name, message: message.substring(0, 200) };
+                lobby.chatHistory.push(chatData);
+                if (lobby.chatHistory.length > 50) lobby.chatHistory.shift();
+                io.to(lobbyId).emit('chat-message', chatData);
+            }
+        }
     });
 
     socket.on('get-lobbies', () => {
@@ -375,7 +405,8 @@ io.on('connection', (socket) => {
         }
         const lobby = lobbies.get(lobbyId);
         if (lobby && lobby.players.length < 4 && lobby.state === 'waiting') {
-            lobby.players.push({ id: socket.id, name: username || `Player ${lobby.players.length + 1}`, ready: false, inventory: {} });
+            const team = lobby.mode === 'TDM' ? (lobby.players.length % 2 === 0 ? 1 : 2) : 1;
+            lobby.players.push({ id: socket.id, name: username || `Player ${lobby.players.length + 1}`, ready: false, inventory: {}, team: team });
             socket.join(lobbyId);
             socket.emit('join-success', lobby);
             io.to(lobbyId).emit('lobby-updated', lobby);
