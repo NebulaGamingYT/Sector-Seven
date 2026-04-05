@@ -81,6 +81,21 @@ app.post('/api/player/save', async (req, res) => {
     }
 });
 
+app.post('/api/player/delete', async (req, res) => {
+    const { email } = req.body;
+    console.log('Delete request received for email:', email);
+    if (!email) return res.status(400).json({ error: 'Email required' });
+
+    try {
+        const result = await PlayerModel.findOneAndDelete({ email: email.toLowerCase() });
+        console.log('Delete result:', result);
+        res.json({ success: true, deleted: !!result });
+    } catch (err) {
+        console.error('Error deleting player data:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -95,6 +110,7 @@ const leaderboardSchema = new mongoose.Schema({
     username: String,
     wave: Number,
     level: { type: Number, default: 1 },
+    gameMode: { type: String, default: 'singleplayer' },
     date: Date
 });
 
@@ -110,7 +126,11 @@ const playerSchema = new mongoose.Schema({
         totalShardsEver: Number,
         seenCards: [String],
         purchasedUpgrades: mongoose.Schema.Types.Mixed,
-        username: String
+        disabledCards: [String],
+        ownedSkins: [String],
+        equippedSkin: String,
+        username: String,
+        color: String
     },
     lastUpdated: { type: Date, default: Date.now }
 });
@@ -156,20 +176,21 @@ async function loadLeaderboard() {
             const scores = await LeaderboardModel.aggregate([
                 { $sort: { wave: -1 } },
                 { $group: {
-                    _id: "$username",
+                    _id: { username: "$username", gameMode: { $ifNull: ["$gameMode", "singleplayer"] } },
                     wave: { $first: "$wave" },
                     level: { $first: "$level" },
                     date: { $first: "$date" }
                 }},
                 { $project: {
                     _id: 0,
-                    username: "$_id",
+                    username: "$_id.username",
+                    gameMode: "$_id.gameMode",
                     wave: 1,
                     level: 1,
                     date: 1
                 }},
                 { $sort: { wave: -1 } },
-                { $limit: 100 }
+                { $limit: 300 }
             ]);
             leaderboard = scores;
             console.log('Leaderboard loaded from MongoDB (unique players)');
@@ -183,15 +204,16 @@ async function cleanupLeaderboard() {
     try {
         if (mongoose.connection.readyState === 1) {
             console.log('Starting leaderboard cleanup...');
-            const allScores = await LeaderboardModel.find().sort({ username: 1, wave: -1 });
+            const allScores = await LeaderboardModel.find().sort({ username: 1, gameMode: 1, wave: -1 });
             const seen = new Set();
             const toDelete = [];
             
             for (const score of allScores) {
-                if (seen.has(score.username)) {
+                const key = `${score.username}_${score.gameMode || 'singleplayer'}`;
+                if (seen.has(key)) {
                     toDelete.push(score._id);
                 } else {
-                    seen.add(score.username);
+                    seen.add(key);
                 }
             }
             
@@ -207,10 +229,13 @@ async function cleanupLeaderboard() {
     }
 }
 
-async function saveScore(username, wave, level) {
+async function saveScore(username, wave, level, gameMode = 'singleplayer') {
     try {
         if (mongoose.connection.readyState === 1) {
-            const existingScore = await LeaderboardModel.findOne({ username });
+            const query = gameMode === 'singleplayer' 
+                ? { username, $or: [{ gameMode: 'singleplayer' }, { gameMode: { $exists: false } }] }
+                : { username, gameMode };
+            const existingScore = await LeaderboardModel.findOne(query);
             
             if (existingScore) {
                 if (wave > existingScore.wave) {
@@ -218,28 +243,29 @@ async function saveScore(username, wave, level) {
                     existingScore.level = level || existingScore.level;
                     existingScore.date = new Date();
                     await existingScore.save();
-                    console.log(`Score updated for ${username}: Wave ${wave} (Lv.${level})`);
+                    console.log(`Score updated for ${username} (${gameMode}): Wave ${wave} (Lv.${level})`);
                 } else {
                     // Even if wave isn't higher, update level if it is
                     if (level && level > (existingScore.level || 0)) {
                         existingScore.level = level;
                         await existingScore.save();
                     }
-                    console.log(`Score for ${username} not updated (existing ${existingScore.wave} >= new ${wave})`);
+                    console.log(`Score for ${username} (${gameMode}) not updated (existing ${existingScore.wave} >= new ${wave})`);
                 }
             } else {
                 const newScore = new LeaderboardModel({
                     username,
                     wave,
                     level: level || 1,
+                    gameMode,
                     date: new Date()
                 });
                 await newScore.save();
-                console.log(`New score saved for ${username}: Wave ${wave} (Lv.${level})`);
+                console.log(`New score saved for ${username} (${gameMode}): Wave ${wave} (Lv.${level})`);
             }
             
             // Insurance: delete any other entries that might have slipped in
-            await LeaderboardModel.deleteMany({ username, wave: { $lt: wave } });
+            await LeaderboardModel.deleteMany({ ...query, wave: { $lt: wave } });
             
             await loadLeaderboard();
         }
@@ -308,14 +334,14 @@ io.on('connection', (socket) => {
         }
 
         console.log('Received record-score event:', data);
-        const { username, wave, level } = data;
+        const { username, wave, level, gameMode = 'singleplayer' } = data;
         if (!username || !wave) {
             console.log('Missing username or wave in record-score event');
             return;
         }
 
         // Optimistic update handling duplicates
-        const existingIdx = leaderboard.findIndex(s => s.username === username);
+        const existingIdx = leaderboard.findIndex(s => s.username === username && (s.gameMode || 'singleplayer') === gameMode);
         if (existingIdx !== -1) {
             if (wave > leaderboard[existingIdx].wave) {
                 leaderboard[existingIdx].wave = wave;
@@ -325,16 +351,16 @@ io.on('connection', (socket) => {
                 leaderboard[existingIdx].level = level;
             }
         } else {
-            leaderboard.push({ username, wave, level: level || 1, date: new Date().toISOString() });
+            leaderboard.push({ username, wave, level: level || 1, gameMode, date: new Date().toISOString() });
         }
         
         leaderboard.sort((a, b) => b.wave - a.wave);
-        if (leaderboard.length > 100) leaderboard = leaderboard.slice(0, 100);
+        // We don't slice here because we have multiple game modes. We'll let the client filter.
         
         io.emit('leaderboard-update', leaderboard);
         
         // Save to DB (handles unique names internally)
-        await saveScore(username, wave, level);
+        await saveScore(username, wave, level, gameMode);
         saveLocalLeaderboard(); // Keep local backup synced
     });
 
@@ -344,7 +370,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('create-lobby', (data) => {
-        const { name: lobbyName, username, mode } = data;
+        const { name: lobbyName, username, mode, color, equippedSkin } = data;
         if (containsProfanity(lobbyName) || containsProfanity(username)) {
             socket.emit('join-error', 'Inappropriate content detected in lobby name or username.');
             return;
@@ -355,7 +381,7 @@ io.on('connection', (socket) => {
             name: lobbyName,
             mode: mode || 'SURVIVAL',
             hostId: socket.id,
-            players: [{ id: socket.id, name: username || 'Player 1', ready: false, inventory: {}, team: 1 }],
+            players: [{ id: socket.id, name: username || 'Player 1', ready: false, inventory: {}, team: 1, color: color || '#00ffcc', equippedSkin: equippedSkin || 'default' }],
             state: 'waiting',
             selectingCardPlayers: new Set(),
             chatHistory: []
@@ -384,7 +410,8 @@ io.on('connection', (socket) => {
         socket.emit('lobbies-update', Array.from(lobbies.values()));
     });
 
-    socket.on('join-lobby', (lobbyId, username) => {
+    socket.on('join-lobby', (data) => {
+        const { lobbyId, username, color, equippedSkin } = typeof data === 'object' ? data : { lobbyId: data, username: 'Player', color: '#00ffcc', equippedSkin: 'default' };
         // Redundant Ban Check
         const userEmail = socket.handshake.headers['x-goog-authenticated-user-email'] || 
                           socket.handshake.headers['x-replit-user-email'] || 
@@ -406,13 +433,37 @@ io.on('connection', (socket) => {
         const lobby = lobbies.get(lobbyId);
         if (lobby && lobby.players.length < 4 && lobby.state === 'waiting') {
             const team = lobby.mode === 'TDM' ? (lobby.players.length % 2 === 0 ? 1 : 2) : 1;
-            lobby.players.push({ id: socket.id, name: username || `Player ${lobby.players.length + 1}`, ready: false, inventory: {}, team: team });
+            lobby.players.push({ id: socket.id, name: username || `Player ${lobby.players.length + 1}`, ready: false, inventory: {}, team: team, color: color || '#00ffcc', equippedSkin: equippedSkin || 'default' });
             socket.join(lobbyId);
             socket.emit('join-success', lobby);
             io.to(lobbyId).emit('lobby-updated', lobby);
             io.emit('lobbies-update', Array.from(lobbies.values()));
         } else {
             socket.emit('join-error', 'Lobby full or not found');
+        }
+    });
+
+    socket.on('update-player-skin', (data) => {
+        const { lobbyId, equippedSkin } = data;
+        const lobby = lobbies.get(lobbyId);
+        if (lobby) {
+            const player = lobby.players.find(p => p.id === socket.id);
+            if (player) {
+                player.equippedSkin = equippedSkin;
+                io.to(lobbyId).emit('lobby-updated', lobby);
+            }
+        }
+    });
+
+    socket.on('update-player-color', (data) => {
+        const { lobbyId, color } = data;
+        const lobby = lobbies.get(lobbyId);
+        if (lobby) {
+            const player = lobby.players.find(p => p.id === socket.id);
+            if (player) {
+                player.color = color;
+                io.to(lobbyId).emit('lobby-updated', lobby);
+            }
         }
     });
 
